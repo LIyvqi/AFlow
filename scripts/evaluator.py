@@ -14,7 +14,7 @@ from benchmarks.math import MATHBenchmark
 from benchmarks.mbpp import MBPPBenchmark
 from benchmarks.livecodebench import LiveCodeBench
 
-# If you want to customize tasks, add task types here and provide evaluation functions, just like the ones given above
+# 如果要新增自己的数据集，需要先把数据集名称加入这里，再在 dataset_configs 中注册评测类。
 DatasetType = Literal["HumanEval", "MBPP", "GSM8K", "MATH", "HotpotQA", "DROP", "LiveCodeBench"]
 
 
@@ -25,6 +25,7 @@ class Evaluator:
 
     def __init__(self, eval_path: str):
         self.eval_path = eval_path
+        # 数据集名称到 Benchmark 类的映射。新增内部数据集时，最常改的就是这里。
         self.dataset_configs: Dict[DatasetType, BaseBenchmark] = {
             "GSM8K": GSM8KBenchmark,
             "MATH": MATHBenchmark,
@@ -38,6 +39,7 @@ class Evaluator:
     async def graph_evaluate(
         self, dataset: DatasetType, graph, params: dict, path: str, is_test: bool = False
     ) -> Tuple[float, float, float]:
+        # graph 是动态加载出来的 Workflow 类；Evaluator 负责把它交给对应 Benchmark 评测。
         if dataset not in self.dataset_configs:
             raise ValueError(f"Unsupported dataset: {dataset}")
 
@@ -45,7 +47,7 @@ class Evaluator:
         benchmark_class = self.dataset_configs[dataset]
         benchmark = benchmark_class(name=dataset, file_path=data_path, log_path=path)
 
-        # Use params to configure the graph and benchmark
+        # 用执行模型配置实例化 workflow，后续每条样本都会调用 configured_graph(problem)。
         configured_graph = await self._configure_graph(dataset, graph, params)
         if is_test:
             va_list = None  # For test data, generally use None to test all
@@ -54,12 +56,13 @@ class Evaluator:
         return await benchmark.run_evaluation(configured_graph, va_list)
 
     async def _configure_graph(self, dataset, graph, params: dict):
-        # Here you can configure the graph based on params
-        # For example: set LLM configuration, dataset configuration, etc.
+        # 这里把 llm_config 和 dataset_config 注入 Workflow。
+        # 如果你的内部任务需要额外配置，也可以从 params 中取出并传给 graph。
         dataset_config = params.get("dataset", {})
         llm_config = params.get("llm_config", {})
         return graph(name=dataset, llm_config=llm_config, dataset=dataset_config)
 
     def _get_data_path(self, dataset: DatasetType, test: bool) -> str:
+        # 默认数据文件命名规则：data/datasets/<dataset>_validate.jsonl 或 _test.jsonl。
         base_path = f"data/datasets/{dataset.lower()}"
         return f"{base_path}_test.jsonl" if test else f"{base_path}_validate.jsonl"

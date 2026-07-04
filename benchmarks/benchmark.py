@@ -15,6 +15,7 @@ from scripts.utils.common import write_json_file
 
 
 class BaseBenchmark(ABC):
+    # 所有数据集评测类的基类。接入自己的数据集时，核心就是继承它并实现下面三个抽象方法。
     def __init__(self, name: str, file_path: str, log_path: str):
         self.name = name
         self.file_path = file_path
@@ -24,6 +25,7 @@ class BaseBenchmark(ABC):
     FAIL = "FAIL"
 
     async def load_data(self, specific_indices: List[int] = None) -> List[dict]:
+        # 默认假设数据是 JSONL：一行一个样本 dict。
         data = []
         async with aiofiles.open(self.file_path, mode="r", encoding="utf-8") as file:
             async for line in file:
@@ -34,6 +36,7 @@ class BaseBenchmark(ABC):
         return data
 
     def save_results_to_csv(self, results: List[Tuple[Any, ...]], columns: List[str]):
+        # 每个样本的评测结果最终会落到 CSV，文件名中包含平均分，方便比较不同 workflow。
         df = pd.DataFrame(results, columns=columns)
         avg_score = df["score"].mean()
         t_cost = df["cost"].max()
@@ -53,6 +56,7 @@ class BaseBenchmark(ABC):
         extracted_output: Any,
         extract_answer_code: str = "None",
     ):
+        # 子类在发现预测错误或格式异常时，可以调用这里记录失败样本，供下一轮优化参考。
         log_data = {
             "question": problem,
             "right_answer": expected_output,
@@ -74,17 +78,21 @@ class BaseBenchmark(ABC):
 
     @abstractmethod
     async def evaluate_problem(self, problem: dict, agent: Callable) -> Tuple[Any, ...]:
+        # 单条样本如何调用 workflow，并返回哪些列，由具体数据集决定。
         pass
 
     @abstractmethod
     def calculate_score(self, expected_output: Any, prediction: Any) -> Tuple[float, Any]:
+        # 这里定义“什么叫答对”。你的输出格式校验和业务评分规则主要写在这里。
         pass
 
     @abstractmethod
     def get_result_columns(self) -> List[str]:
+        # 返回 CSV 表头，必须和 evaluate_problem 返回的 tuple 顺序一致。
         pass
 
     async def evaluate_all_problems(self, data: List[dict], agent: Callable, max_concurrent_tasks: int = 50):
+        # 并发评测样本，避免验证集较大时串行调用 LLM 太慢。
         semaphore = asyncio.Semaphore(max_concurrent_tasks)
 
         async def sem_evaluate(problem):
@@ -95,6 +103,7 @@ class BaseBenchmark(ABC):
         return await tqdm_asyncio.gather(*tasks, desc=f"Evaluating {self.name} problems", total=len(data))
 
     async def run_evaluation(self, agent: Callable, va_list: List[int], max_concurrent_tasks: int = 50):
+        # 标准评测入口：加载数据 -> 调 workflow -> 汇总分数 -> 保存 CSV。
         data = await self.load_data(va_list)
         results = await self.evaluate_all_problems(data, agent, max_concurrent_tasks)
         columns = self.get_result_columns()
@@ -113,4 +122,3 @@ class BaseBenchmark(ABC):
         logger.info(f"Total Cost: {total_cost:.5f}")
         logger.info(f"Avg Cost:{average_cost:.5f}")
         return average_score, average_cost, total_cost
-

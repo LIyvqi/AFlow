@@ -44,6 +44,7 @@ from scripts.utils.code import (
 )
 
 class Operator:
+    # Operator 是 workflow 的“积木”。每个具体 Operator 封装一种可复用能力。
     def __init__(self, llm: AsyncLLM, name: str):
         self.name = name
         self.llm = llm
@@ -52,11 +53,11 @@ class Operator:
         raise NotImplementedError
 
     async def _fill_node(self, op_class, prompt, mode=None, **extra_kwargs):
-        # Create appropriate formatter based on mode
+        # 根据 mode 选择不同的输出解析器，例如 XML、代码块或纯文本。
         formatter = self._create_formatter(op_class, mode, **extra_kwargs)
         
         try:
-            # Use the formatter with AsyncLLM
+            # 有 formatter 时会强约束输出格式；没有时直接返回模型原文。
             if formatter:
                 response = await self.llm.call_with_format(prompt, formatter)
             else:
@@ -91,6 +92,7 @@ class Custom(Operator):
         super().__init__(llm, name)
 
     async def __call__(self, input, instruction):
+        # 最基础的 LLM 生成算子：instruction + input -> response。
         prompt = instruction + input
         response = await self._fill_node(GenerateOp, prompt, mode="single_fill")
         return response
@@ -128,6 +130,7 @@ class ScEnsemble(Operator):
         super().__init__(llm, name)
 
     async def __call__(self, solutions: List[str], problem: str):
+        # 自一致集成：把多个候选答案交给模型选择最可靠的一个。
         answer_mapping = {}
         solution_text = ""
         for index, solution in enumerate(solutions):
@@ -145,7 +148,7 @@ class ScEnsemble(Operator):
 
 def run_code(code):
     try:
-        # Create a new global namespace
+        # 给模型生成的代码一个独立命名空间，避免污染主进程全局变量。
         global_namespace = {}
 
         disallowed_imports = [
@@ -165,7 +168,7 @@ def run_code(code):
             "pyglet",
         ]
 
-        # Check for prohibited imports
+        # 禁止高风险或图形相关导入，降低执行模型生成代码时的风险。
         for lib in disallowed_imports:
             if f"import {lib}" in code or f"from {lib}" in code:
                 logger.info("Detected prohibited import: %s", lib)
@@ -188,7 +191,7 @@ def run_code(code):
 class Programmer(Operator):
     def __init__(self, llm: AsyncLLM, name: str = "Programmer"):
         super().__init__(llm, name)
-        # Create a class-level process pool, instead of creating a new one for each execution
+        # 用独立进程执行模型生成的 solve()，避免阻塞主事件循环。
         self.process_pool = concurrent.futures.ProcessPoolExecutor(max_workers=1)
 
     def __del__(self):
@@ -240,6 +243,7 @@ class Programmer(Operator):
         """
         Call method, generate code and execute, retry up to 3 times.
         """
+        # 生成代码 -> 执行 -> 如果失败，把错误反馈给模型重写，最多重试 3 次。
         code = None
         output = None
         feedback = ""
